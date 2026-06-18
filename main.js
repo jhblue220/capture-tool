@@ -62,59 +62,33 @@ function hasScreenPermission() {
 
 /* ── Display media handler (Electron 17+) ─────────────────── */
 //
-// Intercepts getDisplayMedia() calls from the renderer.
-// Lets the renderer show a native source-picker via our own UI,
-// then we feed back the chosen stream here.
+// Auto-selects the primary screen — no OS picker dialog shown to user.
+// Renderer calls getDisplayMedia() and immediately gets the stream.
 //
-let pendingDisplayMediaCallback = null;
-
 function setupDisplayMediaHandler() {
   const { session } = require('electron');
-  session.defaultSession.setDisplayMediaRequestHandler((_req, callback) => {
-    // Store callback; renderer will resolve it after user picks a source
-    pendingDisplayMediaCallback = callback;
-    win.webContents.send('show-source-picker');
+  session.defaultSession.setDisplayMediaRequestHandler(async (_req, callback) => {
+    if (!hasScreenPermission()) {
+      shell.openExternal(
+        'x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture'
+      );
+      callback(null);
+      win.webContents.send('permission-denied');
+      return;
+    }
+    try {
+      const sources = await desktopCapturer.getSources({
+        types: ['screen'],
+        thumbnailSize: { width: 0, height: 0 },
+      });
+      callback({ video: sources[0] }); // primary screen, no dialog
+    } catch (e) {
+      callback(null);
+    }
   }, { useSystemPicker: false });
 }
 
 /* ── IPC ──────────────────────────────────────────────────── */
-ipcMain.handle('get-sources', async () => {
-  if (!hasScreenPermission()) {
-    // Open System Settings so user can grant access
-    shell.openExternal(
-      'x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture'
-    );
-    return { error: 'permission', message: 'Screen Recording permission required.\nGrant it in System Settings, then relaunch.' };
-  }
-  try {
-    const sources = await desktopCapturer.getSources({
-      types: ['screen', 'window'],
-      thumbnailSize: { width: 160, height: 90 },
-    });
-    return { sources: sources.map(s => ({ id: s.id, name: s.name })) };
-  } catch (e) {
-    return { error: 'getSources', message: e.message };
-  }
-});
-
-// Renderer picked a source → feed to pending getDisplayMedia callback
-ipcMain.on('source-selected', async (_, sourceId) => {
-  if (!pendingDisplayMediaCallback) return;
-  try {
-    const sources = await desktopCapturer.getSources({ types: ['screen', 'window'], thumbnailSize: { width: 0, height: 0 } });
-    const src = sources.find(s => s.id === sourceId);
-    if (src) pendingDisplayMediaCallback({ video: src });
-    else      pendingDisplayMediaCallback(null);
-  } catch {
-    pendingDisplayMediaCallback(null);
-  }
-  pendingDisplayMediaCallback = null;
-});
-
-ipcMain.on('source-cancelled', () => {
-  pendingDisplayMediaCallback?.(null);
-  pendingDisplayMediaCallback = null;
-});
 
 /* ── Widget drag ─────────────────────────────────────────── */
 ipcMain.on('widget-move', (_, { dx, dy }) => {

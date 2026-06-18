@@ -376,72 +376,20 @@
     #clear-btn:hover { background: rgba(255,59,48,0.15); color: #ff6b6b; }
 
     /* ═══════════════════════════════════════
-       SOURCE PICKER
-    ═══════════════════════════════════════ */
-    #source-picker {
-      position: fixed; inset: 0;
-      z-index: 999997;
-      display: none; align-items: center; justify-content: center;
-      background: rgba(0,0,0,0.55);
-      backdrop-filter: blur(10px);
-      -webkit-backdrop-filter: blur(10px);
-    }
-
-    #source-picker.show { display: flex; }
-
-    .picker-card {
-      background: rgba(28,28,30,0.97);
-      border: 1px solid rgba(255,255,255,0.08);
-      border-radius: 16px;
-      padding: 18px;
-      width: 270px;
-      box-shadow: 0 24px 60px rgba(0,0,0,0.65);
-    }
-
-    .picker-title {
-      font-size: 11px;
-      font-weight: 600;
-      color: rgba(255,255,255,0.45);
-      letter-spacing: 0.5px;
-      text-transform: uppercase;
-      margin-bottom: 10px;
-    }
-
-    .source-list {
-      display: flex; flex-direction: column; gap: 3px;
-      max-height: 240px; overflow-y: auto;
-    }
-
-    .source-item {
-      padding: 8px 12px;
-      border-radius: 9px;
-      cursor: pointer;
-      font-size: 12px;
-      color: rgba(255,255,255,0.7);
-      transition: background .12s;
-      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-    }
-
-    .source-item:hover { background: rgba(255,255,255,0.08); color: rgba(255,255,255,0.9); }
-
-    .picker-cancel {
-      margin-top: 10px; width: 100%; padding: 7px;
-      border: none; background: rgba(255,255,255,0.05);
-      color: rgba(255,255,255,0.35); border-radius: 9px;
-      font-size: 11.5px; cursor: pointer; transition: background .12s;
-    }
-
-    .picker-cancel:hover { background: rgba(255,255,255,0.09); }
-
-    /* ═══════════════════════════════════════
-       OVERLAY
+       OVERLAY  — fully transparent, only catches mouse events
     ═══════════════════════════════════════ */
     #overlay {
       position: fixed; inset: 0;
       z-index: 99990; display: none; cursor: none;
+      background: transparent;
     }
 
-    #screen-video { width: 100%; height: 100%; object-fit: contain; display: block; }
+    /* Video hidden — used only for pixel analysis */
+    #screen-video {
+      position: absolute;
+      width: 1px; height: 1px;
+      opacity: 0; pointer-events: none;
+    }
 
     #cursor {
       position: fixed;
@@ -618,15 +566,6 @@
   </div>
 </div>
 
-<!-- ─── Source Picker ─────────────────────────────────── -->
-<div id="source-picker">
-  <div class="picker-card">
-    <div class="picker-title">Select a window or screen</div>
-    <div class="source-list" id="source-list"></div>
-    <button class="picker-cancel" id="picker-cancel">Cancel</button>
-  </div>
-</div>
-
 <!-- ─── Overlay ───────────────────────────────────────── -->
 <div id="overlay">
   <video id="screen-video" autoplay muted playsinline></video>
@@ -671,8 +610,6 @@
   const statusDot   = document.getElementById('status-dot');
   const statusLabel = document.getElementById('status-label');
   const timerEl     = document.getElementById('timer');
-  const sourcePicker= document.getElementById('source-picker');
-  const sourceList  = document.getElementById('source-list');
   const galleryPanel= document.getElementById('gallery-panel');
   const galleryScroll=document.getElementById('gallery-scroll');
   const galleryCount= document.getElementById('gallery-count');
@@ -1021,44 +958,20 @@
     }
   });
 
-  /* ── Source picker ─────────────────────────────────── */
+  /* ── Permission denied handler ─────────────────────────── */
   if (isElectron) {
-    window.electronAPI.onShowPicker(async () => {
-      const res = await window.electronAPI.getSources();
-      if (res.error) {
-        showToast(res.message || 'Screen Recording permission required');
-        window.electronAPI.cancelSource();
-        return;
-      }
-      renderPicker(res.sources);
+    window.electronAPI.onPermissionDenied(() => {
+      showToast('Screen Recording permission required — check System Settings');
     });
   }
-
-  function renderPicker(sources) {
-    sourceList.innerHTML = '';
-    sources.forEach(src => {
-      const el = document.createElement('div');
-      el.className = 'source-item';
-      el.textContent = src.name;
-      el.addEventListener('click', () => {
-        sourcePicker.classList.remove('show');
-        isElectron ? window.electronAPI.selectSource(src.id) : startStreamFromSourceId(src.id);
-      });
-      sourceList.appendChild(el);
-    });
-    sourcePicker.classList.add('show');
-  }
-
-  document.getElementById('picker-cancel').addEventListener('click', () => {
-    sourcePicker.classList.remove('show');
-    if (isElectron) window.electronAPI.cancelSource();
-  });
 
   /* ══════════════════════════════════════════════════════
-     SESSION
+     SESSION  — no picker dialog, auto-selects primary screen
   ══════════════════════════════════════════════════════ */
   async function startSession() {
     try {
+      // Electron: setDisplayMediaRequestHandler auto-picks screen (no dialog).
+      // Browser fallback: standard OS picker appears.
       stream = await navigator.mediaDevices.getDisplayMedia({
         video: { frameRate: 60, cursor: 'never' },
         audio: false,
@@ -1067,16 +980,6 @@
     } catch (err) {
       if (err.name !== 'NotAllowedError') showToast('Could not start capture');
     }
-  }
-
-  async function startStreamFromSourceId(id) {
-    try {
-      stream = await navigator.mediaDevices.getUserMedia({
-        audio: false,
-        video: { mandatory: { chromeMediaSource: 'desktop', chromeMediaSourceId: id, maxFrameRate: 60 } },
-      });
-      await initStream();
-    } catch { showToast('Could not open source'); }
   }
 
   async function initStream() {
@@ -1116,18 +1019,13 @@
   }
 
   /* ── Coordinate mapping ────────────────────────────── */
+  // Transparent overlay: video stream fills the full logical screen.
+  // Map cursor position directly to video pixel coordinates.
   function updateMapping() {
-    const r   = overlay.getBoundingClientRect();
-    const vAR = video.videoWidth / video.videoHeight;
-    const dAR = r.width / r.height;
-    if (vAR > dAR) {
-      videoDispW = r.width; videoDispH = r.width / vAR;
-      videoOffX  = 0; videoOffY = (r.height - videoDispH) / 2;
-    } else {
-      videoDispH = r.height; videoDispW = r.height * vAR;
-      videoOffX  = (r.width - videoDispW) / 2; videoOffY = 0;
-    }
-    scaleX = video.videoWidth / videoDispW;
+    videoOffX = 0; videoOffY = 0;
+    videoDispW = window.screen.width;
+    videoDispH = window.screen.height;
+    scaleX = video.videoWidth  / videoDispW;
     scaleY = video.videoHeight / videoDispH;
   }
 
