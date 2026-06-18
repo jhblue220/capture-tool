@@ -90,6 +90,8 @@ function setupDisplayMediaHandler() {
 
 /* ── IPC ──────────────────────────────────────────────────── */
 
+ipcMain.on('hide-widget', () => win?.hide());
+
 /* ── Widget drag ─────────────────────────────────────────── */
 ipcMain.on('widget-move', (_, { dx, dy }) => {
   if (!win) return;
